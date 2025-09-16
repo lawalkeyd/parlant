@@ -1,17 +1,24 @@
 from dataclasses import dataclass
-from typing import Sequence
+from typing import Sequence, Optional, Mapping
 
+from parlant.core.agents import AgentId
+from parlant.core.common import JSONSerializable
 from parlant.core.guidelines import Guideline, GuidelineId, GuidelineStore
 from parlant.core.loggers import Logger
 from parlant.core.journeys import (
     JourneyEdge,
+    JourneyEdgeId,
     JourneyId,
     JourneyNode,
+    JourneyNodeId,
+    JourneyNodeUpdateParams,
+    JourneyEdgeUpdateParams,
     JourneyStore,
     Journey,
     JourneyUpdateParams,
 )
 from parlant.core.tags import Tag, TagId
+from parlant.core.tools import ToolId
 
 
 @dataclass(frozen=True)
@@ -72,6 +79,31 @@ class JourneyModule:
                 guideline_id=guideline.id,
                 tag_id=Tag.for_journey_id(journey.id),
             )
+
+        return journey, guidelines
+
+    async def create_for_agent(
+        self,
+        agent_id: AgentId,
+        title: str,
+        description: str,
+        conditions: Sequence[str],
+        tags: Sequence[TagId] | None = None,
+    ) -> tuple[Journey, Sequence[Guideline]]:
+        """Creates a journey specifically for an agent, automatically tagging it."""
+        # Prepare tags including the agent tag
+        all_tags = list(tags) if tags else []
+        agent_tag = Tag.for_agent_id(agent_id)
+        if agent_tag not in all_tags:
+            all_tags.append(agent_tag)
+
+        # Create the journey with agent tag
+        journey, guidelines = await self.create(
+            title=title,
+            description=description,
+            conditions=conditions,
+            tags=all_tags,
+        )
 
         return journey, guidelines
 
@@ -177,3 +209,105 @@ class JourneyModule:
                         guideline_id=condition,
                         tag_id=Tag.for_journey_id(journey_id),
                     )
+
+    async def create_node(
+        self,
+        journey_id: JourneyId,
+        action: Optional[str],
+        tools: Sequence[ToolId],
+    ) -> JourneyNode:
+        """Creates a new node in the journey."""
+        return await self._journey_store.create_node(
+            journey_id=journey_id,
+            action=action,
+            tools=tools,
+        )
+
+    async def read_node(
+        self,
+        node_id: JourneyNodeId,
+    ) -> JourneyNode:
+        """Reads a specific node by ID."""
+        return await self._journey_store.read_node(node_id=node_id)
+
+    async def update_node(
+        self,
+        node_id: JourneyNodeId,
+        action: Optional[str] = None,
+        tools: Optional[Sequence[ToolId]] = None,
+    ) -> JourneyNode:
+        """Updates a node's properties."""
+        params: JourneyNodeUpdateParams = {}
+        if action is not None:
+            params["action"] = action
+        if tools is not None:
+            params["tools"] = tools
+
+        return await self._journey_store.update_node(
+            node_id=node_id,
+            params=params,
+        )
+
+    async def delete_node(
+        self,
+        node_id: JourneyNodeId,
+    ) -> None:
+        """Deletes a node from the journey."""
+        await self._journey_store.delete_node(node_id=node_id)
+
+    async def set_node_metadata(
+        self,
+        node_id: JourneyNodeId,
+        key: str,
+        value: JSONSerializable,
+    ) -> JourneyNode:
+        """Sets metadata on a node."""
+        return await self._journey_store.set_node_metadata(
+            node_id=node_id,
+            key=key,
+            value=value,
+        )
+
+    async def create_edge(
+        self,
+        journey_id: JourneyId,
+        source: JourneyNodeId,
+        target: JourneyNodeId,
+        condition: Optional[str],
+    ) -> JourneyEdge:
+        """Creates an edge (transition) between two nodes."""
+        return await self._journey_store.create_edge(
+            journey_id=journey_id,
+            source=source,
+            target=target,
+            condition=condition,
+        )
+
+    async def read_edge(
+        self,
+        edge_id: JourneyEdgeId,
+    ) -> JourneyEdge:
+        """Reads a specific edge by ID."""
+        return await self._journey_store.read_edge(edge_id=edge_id)
+
+    async def update_edge(
+        self,
+        edge_id: JourneyEdgeId,
+        condition: Optional[str] = None,
+    ) -> JourneyEdge:
+        """Updates an edge's condition."""
+        params: JourneyEdgeUpdateParams = {}
+        if condition is not None:
+            params["condition"] = condition
+
+        return await self._journey_store.update_edge(
+            edge_id=edge_id,
+            params=params,
+        )
+
+    async def delete_edge(
+        self,
+        edge_id: JourneyEdgeId,
+    ) -> None:
+        """Deletes an edge from the journey."""
+        await self._journey_store.delete_edge(edge_id=edge_id)

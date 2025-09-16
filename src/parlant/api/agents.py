@@ -23,6 +23,8 @@ from parlant.app_modules.agents import AgentTagUpdateParamsModel
 from parlant.core.agents import AgentId, CompositionMode
 from parlant.core.application import Application
 from parlant.core.common import DefaultBaseModel
+from parlant.core.guidelines import GuidelineId
+from parlant.core.journeys import JourneyId
 from parlant.core.tags import TagId
 
 API_GROUP = "agents"
@@ -478,5 +480,131 @@ def create_router(
         )
 
         await app.agents.delete(agent_id=agent_id)
+
+    # Journey creation for agents
+    journey_example: ExampleJson = {
+        "id": "journey_123",
+        "title": "Schedule an Appointment",
+        "description": "Helps the patient find a time for their appointment.",
+        "conditions": ["guid_456", "guid_789"],
+        "tags": ["agent:agent_123", "tag1"],
+    }
+
+    class AgentJourneyCreationParamsDTO(
+        DefaultBaseModel,
+        json_schema_extra={
+            "example": {
+                "title": "Schedule an Appointment",
+                "description": "Helps the patient find a time for their appointment.",
+                "conditions": ["The patient wants to schedule an appointment"],
+                "tags": ["appointment", "scheduling"],
+            }
+        },
+    ):
+        """
+        Parameters for creating a journey for a specific agent.
+        """
+
+        title: Annotated[
+            str,
+            Field(
+                description="The title of the journey",
+                examples=["Schedule an Appointment", "Product Support"],
+                min_length=1,
+                max_length=100,
+            ),
+        ]
+        description: Annotated[
+            str,
+            Field(
+                description="Detailed description of the journey's purpose and flow",
+                examples=["Helps the patient find a time for their appointment."],
+            ),
+        ]
+        conditions: Annotated[
+            list[str],
+            Field(
+                description="The conditions that trigger this journey",
+                examples=[["The patient wants to schedule an appointment"]],
+                min_length=1,
+            ),
+        ]
+        tags: Annotated[
+            list[TagId] | None,
+            Field(
+                default=None,
+                description="Additional tags for the journey (agent tag will be added automatically)",
+                examples=[["appointment", "scheduling"]],
+            ),
+        ]
+
+    class AgentJourneyDTO(
+        DefaultBaseModel,
+        json_schema_extra={"example": journey_example},
+    ):
+        """
+        A journey created for a specific agent.
+        """
+
+        id: JourneyId
+        title: str
+        description: str
+        conditions: Sequence[GuidelineId]
+        tags: Sequence[TagId]
+
+    @router.post(
+        "/{agent_id}/journeys",
+        status_code=status.HTTP_201_CREATED,
+        operation_id="create_agent_journey",
+        response_model=AgentJourneyDTO,
+        responses={
+            status.HTTP_201_CREATED: {
+                "description": "Journey successfully created for the agent. Returns the complete journey object.",
+                "content": example_json_content(journey_example),
+            },
+            status.HTTP_404_NOT_FOUND: {
+                "description": "Agent not found. The specified `agent_id` does not exist"
+            },
+            status.HTTP_422_UNPROCESSABLE_ENTITY: {
+                "description": "Validation error in request parameters"
+            },
+        },
+        **apigen_config(group_name=API_GROUP, method_name="create_journey"),
+    )
+    async def create_agent_journey(
+        request: Request,
+        agent_id: AgentIdPath,
+        params: AgentJourneyCreationParamsDTO,
+    ) -> AgentJourneyDTO:
+        """
+        Creates a new journey for the specified agent.
+
+        The journey will be automatically tagged with the agent's ID, ensuring it's associated
+        with this agent. Additional tags can be provided in the request.
+        """
+        await policy.authorize(
+            request=request,
+            operation=Operation.CREATE_JOURNEY,  # Using existing journey creation permission
+        )
+
+        # Verify agent exists
+        await app.agents.read(agent_id)
+
+        # Create journey with agent tag
+        journey, guidelines = await app.journeys.create_for_agent(
+            agent_id=agent_id,
+            title=params.title,
+            description=params.description,
+            conditions=params.conditions,
+            tags=params.tags,
+        )
+
+        return AgentJourneyDTO(
+            id=journey.id,
+            title=journey.title,
+            description=journey.description,
+            conditions=[g.id for g in guidelines],
+            tags=journey.tags,
+        )
 
     return router

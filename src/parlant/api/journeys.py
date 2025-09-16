@@ -29,11 +29,13 @@ from parlant.core.common import DefaultBaseModel, JSONSerializable
 from parlant.api.common import ExampleJson, apigen_config, example_json_content
 from parlant.core.journeys import (
     JourneyEdge,
+    JourneyEdgeId,
     JourneyId,
     JourneyNode,
     JourneyNodeId,
     JourneyStore,
 )
+from parlant.core.tools import ToolId
 from parlant.core.guidelines import GuidelineId
 from parlant.core.tags import TagId
 
@@ -99,6 +101,7 @@ journey_example: ExampleJson = {
         "customer needs help with card",
     ],
     "tags": ["tag1", "tag2"],
+    "root_node_id": "node_root_123",
 }
 
 JourneyMermaidChartDTO: TypeAlias = Annotated[
@@ -134,6 +137,167 @@ class JourneyDTO(
     description: str
     conditions: Sequence[GuidelineId]
     tags: JourneyTagsField
+    root_node_id: JourneyNodeId
+
+
+JourneyNodeIdPath: TypeAlias = Annotated[
+    JourneyNodeId,
+    Path(
+        description="Unique identifier for the journey node",
+        examples=["node_abc123"],
+        min_length=1,
+    ),
+]
+
+JourneyEdgeIdPath: TypeAlias = Annotated[
+    JourneyEdgeId,
+    Path(
+        description="Unique identifier for the journey edge",
+        examples=["edge_xyz789"],
+        min_length=1,
+    ),
+]
+
+JourneyNodeActionField: TypeAlias = Annotated[
+    str | None,
+    Field(
+        default=None,
+        description="The action to perform at this node",
+        examples=["Confirm appointment details", "Ask for preferred time"],
+    ),
+]
+
+JourneyNodeToolsField: TypeAlias = Annotated[
+    list[ToolId],
+    Field(
+        default_factory=list,
+        description="List of tool IDs available at this node",
+        examples=[["tool_123", "tool_456"]],
+    ),
+]
+
+JourneyEdgeConditionField: TypeAlias = Annotated[
+    str | None,
+    Field(
+        default=None,
+        description="The condition that triggers this transition",
+        examples=["The patient picks a time", "The patient wants to reschedule"],
+    ),
+]
+
+node_example: ExampleJson = {
+    "id": "node_abc123",
+    "creation_utc": "2024-01-20T10:30:00Z",
+    "action": "Ask for preferred appointment time",
+    "tools": ["get_available_slots"],
+    "metadata": {"journey_node": {"kind": "chat"}},
+}
+
+edge_example: ExampleJson = {
+    "id": "edge_xyz789",
+    "creation_utc": "2024-01-20T10:30:00Z",
+    "source": "node_abc123",
+    "target": "node_def456",
+    "condition": "The patient selects a time slot",
+    "metadata": {},
+}
+
+
+class JourneyNodeDTO(
+    DefaultBaseModel,
+    json_schema_extra={"example": node_example},
+):
+    """
+    A node represents a state or step in a journey.
+    """
+
+    id: JourneyNodeId
+    creation_utc: str
+    action: str | None
+    tools: Sequence[ToolId]
+    metadata: dict[str, JSONSerializable]
+
+
+class JourneyNodeCreationParamsDTO(
+    DefaultBaseModel,
+    json_schema_extra={"example": {"action": "Ask for preferred time", "tools": ["tool_123"]}},
+):
+    """
+    Parameters for creating a new journey node.
+    """
+
+    action: JourneyNodeActionField = None
+    tools: JourneyNodeToolsField = Field(default_factory=list)
+
+
+class JourneyNodeUpdateParamsDTO(
+    DefaultBaseModel,
+    json_schema_extra={"example": {"action": "Updated action text"}},
+):
+    """
+    Parameters for updating a journey node.
+    """
+
+    action: JourneyNodeActionField = None
+    tools: JourneyNodeToolsField | None = None
+
+
+class JourneyEdgeDTO(
+    DefaultBaseModel,
+    json_schema_extra={"example": edge_example},
+):
+    """
+    An edge represents a transition between two nodes in a journey.
+    """
+
+    id: JourneyEdgeId
+    creation_utc: str
+    source: JourneyNodeId
+    target: JourneyNodeId
+    condition: str | None
+    metadata: dict[str, JSONSerializable]
+
+
+class JourneyEdgeCreationParamsDTO(
+    DefaultBaseModel,
+    json_schema_extra={
+        "example": {
+            "source": "node_abc123",
+            "target": "node_def456",
+            "condition": "The patient confirms",
+        }
+    },
+):
+    """
+    Parameters for creating a new journey edge (transition).
+    """
+
+    source: JourneyNodeId
+    target: JourneyNodeId
+    condition: JourneyEdgeConditionField = None
+
+
+class JourneyEdgeUpdateParamsDTO(
+    DefaultBaseModel,
+    json_schema_extra={"example": {"condition": "Updated condition"}},
+):
+    """
+    Parameters for updating a journey edge.
+    """
+
+    condition: JourneyEdgeConditionField = None
+
+
+class JourneyNodeMetadataDTO(
+    DefaultBaseModel,
+    json_schema_extra={"example": {"key": "journey_node", "value": {"kind": "tool"}}},
+):
+    """
+    Metadata to set on a journey node.
+    """
+
+    key: str
+    value: JSONSerializable
 
 
 class JourneyCreationParamsDTO(
@@ -418,6 +582,7 @@ def create_router(
             description=journey.description,
             conditions=[g.id for g in guidelines],
             tags=journey.tags,
+            root_node_id=journey.root_id,
         )
 
     @router.get(
@@ -452,6 +617,7 @@ def create_router(
                     description=journey.description,
                     conditions=journey.conditions,
                     tags=journey.tags,
+                    root_node_id=journey.root_id,
                 )
             )
 
@@ -489,6 +655,7 @@ def create_router(
             description=model.journey.description,
             conditions=model.journey.conditions,
             tags=model.journey.tags,
+            root_node_id=model.journey.root_id,
         )
 
     @router.get(
@@ -569,6 +736,7 @@ def create_router(
             description=journey.description,
             conditions=journey.conditions,
             tags=journey.tags,
+            root_node_id=journey.root_id,
         )
 
     @router.delete(
@@ -599,5 +767,417 @@ def create_router(
         await authorization_policy.authorize(request=request, operation=Operation.DELETE_JOURNEY)
 
         await app.journeys.delete(journey_id)
+
+    # Node operations
+    @router.post(
+        "/{journey_id}/nodes",
+        status_code=status.HTTP_201_CREATED,
+        operation_id="create_journey_node",
+        response_model=JourneyNodeDTO,
+        responses={
+            status.HTTP_201_CREATED: {
+                "description": "Node successfully created",
+                "content": example_json_content(node_example),
+            },
+            status.HTTP_404_NOT_FOUND: {"description": "Journey not found"},
+        },
+        **apigen_config(group_name=API_GROUP, method_name="create_node"),
+    )
+    async def create_journey_node(
+        request: Request,
+        journey_id: JourneyIdPath,
+        params: JourneyNodeCreationParamsDTO,
+    ) -> JourneyNodeDTO:
+        """
+        Creates a new node in the journey.
+        """
+        await authorization_policy.authorize(request=request, operation=Operation.UPDATE_JOURNEY)
+
+        node = await app.journeys.create_node(
+            journey_id=journey_id,
+            action=params.action,
+            tools=params.tools,
+        )
+
+        return JourneyNodeDTO(
+            id=node.id,
+            creation_utc=node.creation_utc.isoformat(),
+            action=node.action,
+            tools=node.tools,
+            metadata=node.metadata,
+        )
+
+    @router.get(
+        "/{journey_id}/nodes",
+        operation_id="list_journey_nodes",
+        response_model=Sequence[JourneyNodeDTO],
+        responses={
+            status.HTTP_200_OK: {
+                "description": "List of all nodes in the journey",
+                "content": example_json_content([node_example]),
+            },
+            status.HTTP_404_NOT_FOUND: {"description": "Journey not found"},
+        },
+        **apigen_config(group_name=API_GROUP, method_name="list_nodes"),
+    )
+    async def list_journey_nodes(
+        request: Request,
+        journey_id: JourneyIdPath,
+    ) -> Sequence[JourneyNodeDTO]:
+        """
+        Lists all nodes in a journey.
+        """
+        await authorization_policy.authorize(request=request, operation=Operation.READ_JOURNEY)
+
+        graph = await app.journeys.read(journey_id=journey_id)
+
+        return [
+            JourneyNodeDTO(
+                id=node.id,
+                creation_utc=node.creation_utc.isoformat(),
+                action=node.action,
+                tools=node.tools,
+                metadata=node.metadata,
+            )
+            for node in graph.nodes
+        ]
+
+    @router.get(
+        "/nodes/{node_id}",
+        operation_id="read_journey_node",
+        response_model=JourneyNodeDTO,
+        responses={
+            status.HTTP_200_OK: {
+                "description": "Node details",
+                "content": example_json_content(node_example),
+            },
+            status.HTTP_404_NOT_FOUND: {"description": "Node not found"},
+        },
+        **apigen_config(group_name=API_GROUP, method_name="read_node"),
+    )
+    async def read_journey_node(
+        request: Request,
+        node_id: JourneyNodeIdPath,
+    ) -> JourneyNodeDTO:
+        """
+        Retrieves details of a specific journey node.
+        """
+        await authorization_policy.authorize(request=request, operation=Operation.READ_JOURNEY)
+
+        node = await app.journeys.read_node(node_id=node_id)
+
+        return JourneyNodeDTO(
+            id=node.id,
+            creation_utc=node.creation_utc.isoformat(),
+            action=node.action,
+            tools=node.tools,
+            metadata=node.metadata,
+        )
+
+    @router.patch(
+        "/nodes/{node_id}",
+        operation_id="update_journey_node",
+        response_model=JourneyNodeDTO,
+        responses={
+            status.HTTP_200_OK: {
+                "description": "Node successfully updated",
+                "content": example_json_content(node_example),
+            },
+            status.HTTP_404_NOT_FOUND: {"description": "Node not found"},
+        },
+        **apigen_config(group_name=API_GROUP, method_name="update_node"),
+    )
+    async def update_journey_node(
+        request: Request,
+        node_id: JourneyNodeIdPath,
+        params: JourneyNodeUpdateParamsDTO,
+    ) -> JourneyNodeDTO:
+        """
+        Updates a journey node.
+        """
+        await authorization_policy.authorize(request=request, operation=Operation.UPDATE_JOURNEY)
+
+        node = await app.journeys.update_node(
+            node_id=node_id,
+            action=params.action,
+            tools=params.tools,
+        )
+
+        return JourneyNodeDTO(
+            id=node.id,
+            creation_utc=node.creation_utc.isoformat(),
+            action=node.action,
+            tools=node.tools,
+            metadata=node.metadata,
+        )
+
+    @router.delete(
+        "/nodes/{node_id}",
+        operation_id="delete_journey_node",
+        status_code=status.HTTP_204_NO_CONTENT,
+        responses={
+            status.HTTP_204_NO_CONTENT: {"description": "Node successfully deleted"},
+            status.HTTP_404_NOT_FOUND: {"description": "Node not found"},
+        },
+        **apigen_config(group_name=API_GROUP, method_name="delete_node"),
+    )
+    async def delete_journey_node(
+        request: Request,
+        node_id: JourneyNodeIdPath,
+    ) -> None:
+        """
+        Deletes a journey node.
+        """
+        await authorization_policy.authorize(request=request, operation=Operation.UPDATE_JOURNEY)
+
+        await app.journeys.delete_node(node_id=node_id)
+
+    @router.post(
+        "/nodes/{node_id}/metadata",
+        operation_id="set_journey_node_metadata",
+        response_model=JourneyNodeDTO,
+        responses={
+            status.HTTP_200_OK: {
+                "description": "Metadata successfully set",
+                "content": example_json_content(node_example),
+            },
+            status.HTTP_404_NOT_FOUND: {"description": "Node not found"},
+        },
+        **apigen_config(group_name=API_GROUP, method_name="set_node_metadata"),
+    )
+    async def set_journey_node_metadata(
+        request: Request,
+        node_id: JourneyNodeIdPath,
+        params: JourneyNodeMetadataDTO,
+    ) -> JourneyNodeDTO:
+        """
+        Sets metadata on a journey node.
+        """
+        await authorization_policy.authorize(request=request, operation=Operation.UPDATE_JOURNEY)
+
+        node = await app.journeys.set_node_metadata(
+            node_id=node_id,
+            key=params.key,
+            value=params.value,
+        )
+
+        return JourneyNodeDTO(
+            id=node.id,
+            creation_utc=node.creation_utc.isoformat(),
+            action=node.action,
+            tools=node.tools,
+            metadata=node.metadata,
+        )
+
+    # Edge operations
+    @router.post(
+        "/{journey_id}/edges",
+        status_code=status.HTTP_201_CREATED,
+        operation_id="create_journey_edge",
+        response_model=JourneyEdgeDTO,
+        responses={
+            status.HTTP_201_CREATED: {
+                "description": "Edge successfully created",
+                "content": example_json_content(edge_example),
+            },
+            status.HTTP_404_NOT_FOUND: {"description": "Journey not found"},
+        },
+        **apigen_config(group_name=API_GROUP, method_name="create_edge"),
+    )
+    async def create_journey_edge(
+        request: Request,
+        journey_id: JourneyIdPath,
+        params: JourneyEdgeCreationParamsDTO,
+    ) -> JourneyEdgeDTO:
+        """
+        Creates a new edge (transition) between nodes in the journey.
+        """
+        await authorization_policy.authorize(request=request, operation=Operation.UPDATE_JOURNEY)
+
+        edge = await app.journeys.create_edge(
+            journey_id=journey_id,
+            source=params.source,
+            target=params.target,
+            condition=params.condition,
+        )
+
+        return JourneyEdgeDTO(
+            id=edge.id,
+            creation_utc=edge.creation_utc.isoformat(),
+            source=edge.source,
+            target=edge.target,
+            condition=edge.condition,
+            metadata=edge.metadata,
+        )
+
+    @router.get(
+        "/{journey_id}/edges",
+        operation_id="list_journey_edges",
+        response_model=Sequence[JourneyEdgeDTO],
+        responses={
+            status.HTTP_200_OK: {
+                "description": "List of all edges in the journey",
+                "content": example_json_content([edge_example]),
+            },
+            status.HTTP_404_NOT_FOUND: {"description": "Journey not found"},
+        },
+        **apigen_config(group_name=API_GROUP, method_name="list_edges"),
+    )
+    async def list_journey_edges(
+        request: Request,
+        journey_id: JourneyIdPath,
+    ) -> Sequence[JourneyEdgeDTO]:
+        """
+        Lists all edges (transitions) in a journey.
+        """
+        await authorization_policy.authorize(request=request, operation=Operation.READ_JOURNEY)
+
+        graph = await app.journeys.read(journey_id=journey_id)
+
+        return [
+            JourneyEdgeDTO(
+                id=edge.id,
+                creation_utc=edge.creation_utc.isoformat(),
+                source=edge.source,
+                target=edge.target,
+                condition=edge.condition,
+                metadata=edge.metadata,
+            )
+            for edge in graph.edges
+        ]
+
+    @router.get(
+        "/edges/{edge_id}",
+        operation_id="read_journey_edge",
+        response_model=JourneyEdgeDTO,
+        responses={
+            status.HTTP_200_OK: {
+                "description": "Edge details",
+                "content": example_json_content(edge_example),
+            },
+            status.HTTP_404_NOT_FOUND: {"description": "Edge not found"},
+        },
+        **apigen_config(group_name=API_GROUP, method_name="read_edge"),
+    )
+    async def read_journey_edge(
+        request: Request,
+        edge_id: JourneyEdgeIdPath,
+    ) -> JourneyEdgeDTO:
+        """
+        Retrieves details of a specific journey edge.
+        """
+        await authorization_policy.authorize(request=request, operation=Operation.READ_JOURNEY)
+
+        edge = await app.journeys.read_edge(edge_id=edge_id)
+
+        return JourneyEdgeDTO(
+            id=edge.id,
+            creation_utc=edge.creation_utc.isoformat(),
+            source=edge.source,
+            target=edge.target,
+            condition=edge.condition,
+            metadata=edge.metadata,
+        )
+
+    @router.patch(
+        "/edges/{edge_id}",
+        operation_id="update_journey_edge",
+        response_model=JourneyEdgeDTO,
+        responses={
+            status.HTTP_200_OK: {
+                "description": "Edge successfully updated",
+                "content": example_json_content(edge_example),
+            },
+            status.HTTP_404_NOT_FOUND: {"description": "Edge not found"},
+        },
+        **apigen_config(group_name=API_GROUP, method_name="update_edge"),
+    )
+    async def update_journey_edge(
+        request: Request,
+        edge_id: JourneyEdgeIdPath,
+        params: JourneyEdgeUpdateParamsDTO,
+    ) -> JourneyEdgeDTO:
+        """
+        Updates a journey edge.
+        """
+        await authorization_policy.authorize(request=request, operation=Operation.UPDATE_JOURNEY)
+
+        edge = await app.journeys.update_edge(
+            edge_id=edge_id,
+            condition=params.condition,
+        )
+
+        return JourneyEdgeDTO(
+            id=edge.id,
+            creation_utc=edge.creation_utc.isoformat(),
+            source=edge.source,
+            target=edge.target,
+            condition=edge.condition,
+            metadata=edge.metadata,
+        )
+
+    @router.delete(
+        "/edges/{edge_id}",
+        operation_id="delete_journey_edge",
+        status_code=status.HTTP_204_NO_CONTENT,
+        responses={
+            status.HTTP_204_NO_CONTENT: {"description": "Edge successfully deleted"},
+            status.HTTP_404_NOT_FOUND: {"description": "Edge not found"},
+        },
+        **apigen_config(group_name=API_GROUP, method_name="delete_edge"),
+    )
+    async def delete_journey_edge(
+        request: Request,
+        edge_id: JourneyEdgeIdPath,
+    ) -> None:
+        """
+        Deletes a journey edge.
+        """
+        await authorization_policy.authorize(request=request, operation=Operation.UPDATE_JOURNEY)
+
+        await app.journeys.delete_edge(edge_id=edge_id)
+
+    @router.get(
+        "/{journey_id}/initial-node",
+        operation_id="get_journey_initial_node",
+        response_model=JourneyNodeDTO,
+        responses={
+            status.HTTP_200_OK: {
+                "description": "Initial (root) node of the journey",
+                "content": example_json_content(node_example),
+            },
+            status.HTTP_404_NOT_FOUND: {"description": "Journey or node not found"},
+        },
+        **apigen_config(group_name=API_GROUP, method_name="get_initial_node"),
+    )
+    async def get_journey_initial_node(
+        request: Request,
+        journey_id: JourneyIdPath,
+    ) -> JourneyNodeDTO:
+        """
+        Retrieves the initial (root) node of a journey.
+
+        This is the starting point from which transitions can be created.
+        """
+        await authorization_policy.authorize(request=request, operation=Operation.READ_JOURNEY)
+
+        # Get the journey to find the root node ID
+        graph = await app.journeys.read(journey_id=journey_id)
+        root_id = graph.journey.root_id
+
+        # Find the root node in the nodes list
+        root_node = next((n for n in graph.nodes if n.id == root_id), None)
+
+        if not root_node:
+            # Create initial node if it doesn't exist (should be rare)
+            root_node = await app.journeys.read_node(node_id=root_id)
+
+        return JourneyNodeDTO(
+            id=root_node.id,
+            creation_utc=root_node.creation_utc.isoformat(),
+            action=root_node.action,
+            tools=root_node.tools,
+            metadata=root_node.metadata,
+        )
 
     return router
