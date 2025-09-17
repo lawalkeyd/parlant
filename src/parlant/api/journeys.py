@@ -16,7 +16,7 @@ from collections import defaultdict
 from fastapi import APIRouter, Path, Query, Request, status
 from fastapi.responses import PlainTextResponse
 from pydantic import Field
-from typing import Annotated, Sequence, TypeAlias, cast
+from typing import Annotated, Any, Sequence, TypeAlias, cast
 
 from parlant.api.authorization import Operation, AuthorizationPolicy
 from parlant.app_modules.journeys import (
@@ -215,7 +215,7 @@ class JourneyNodeDTO(
     creation_utc: str
     action: str | None
     tools: Sequence[ToolId]
-    metadata: dict[str, JSONSerializable]
+    metadata: dict[str, Any]
 
 
 class JourneyNodeCreationParamsDTO(
@@ -255,7 +255,7 @@ class JourneyEdgeDTO(
     source: JourneyNodeId
     target: JourneyNodeId
     condition: str | None
-    metadata: dict[str, JSONSerializable]
+    metadata: dict[str, Any]
 
 
 class JourneyEdgeCreationParamsDTO(
@@ -297,7 +297,7 @@ class JourneyNodeMetadataDTO(
     """
 
     key: str
-    value: JSONSerializable
+    value: Any
 
 
 class JourneyCreationParamsDTO(
