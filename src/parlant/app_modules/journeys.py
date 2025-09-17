@@ -17,6 +17,12 @@ from parlant.core.journeys import (
     Journey,
     JourneyUpdateParams,
 )
+from parlant.core.relationships import (
+    RelationshipEntity,
+    RelationshipEntityKind,
+    RelationshipKind,
+    RelationshipStore,
+)
 from parlant.core.tags import Tag, TagId
 from parlant.core.tools import ToolId
 
@@ -46,10 +52,12 @@ class JourneyModule:
         logger: Logger,
         journey_store: JourneyStore,
         guideline_store: GuidelineStore,
+        relationship_store: RelationshipStore,
     ):
         self._logger = logger
         self._journey_store = journey_store
         self._guideline_store = guideline_store
+        self._relationship_store = relationship_store
 
     async def create(
         self,
@@ -217,11 +225,32 @@ class JourneyModule:
         tools: Sequence[ToolId],
     ) -> JourneyNode:
         """Creates a new node in the journey."""
-        return await self._journey_store.create_node(
+        # Auto-generate action text if we have a single tool and no action
+        if len(tools) == 1 and not action:
+            action = f"Use the tool {tools[0].tool_name}"
+
+        node = await self._journey_store.create_node(
             journey_id=journey_id,
             action=action,
             tools=tools,
         )
+
+        # Create relationships between node and tools
+        if tools:
+            for tool_id in tools:
+                await self._relationship_store.create_relationship(
+                    source=RelationshipEntity(
+                        id=Tag.for_journey_node_id(node.id),
+                        kind=RelationshipEntityKind.TAG,
+                    ),
+                    target=RelationshipEntity(
+                        id=tool_id,
+                        kind=RelationshipEntityKind.TOOL,
+                    ),
+                    kind=RelationshipKind.REEVALUATION,
+                )
+
+        return node
 
     async def read_node(
         self,
