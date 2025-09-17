@@ -337,7 +337,7 @@ class JourneyNodeAssociationDocument(TypedDict, total=False):
     creation_utc: str
     journey_id: JourneyId
     action: Optional[str]
-    tools: Sequence[ToolId]
+    tools: Sequence[str]  # Stored as serialized ToolId strings
     metadata: Mapping[str, JSONSerializable]
 
 
@@ -595,7 +595,7 @@ class JourneyVectorStore(JourneyStore):
             creation_utc=datetime.now(timezone.utc).isoformat(),
             journey_id=journey_id,
             action=node.action,
-            tools=node.tools,
+            tools=[tool.to_string() for tool in node.tools],  # Serialize ToolIds to strings
             metadata=node.metadata,
         )
 
@@ -604,7 +604,7 @@ class JourneyVectorStore(JourneyStore):
             id=JourneyNodeId(doc["node_id"]),
             creation_utc=datetime.fromisoformat(doc["creation_utc"]),
             action=doc["action"],
-            tools=doc["tools"],
+            tools=[ToolId.from_string(tool) for tool in doc["tools"]],  # Deserialize strings to ToolIds
             metadata=doc["metadata"],
         )
 
