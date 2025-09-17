@@ -168,11 +168,11 @@ JourneyNodeActionField: TypeAlias = Annotated[
 ]
 
 JourneyNodeToolsField: TypeAlias = Annotated[
-    list[ToolId],
+    list[str],
     Field(
         default_factory=list,
-        description="List of tool IDs available at this node",
-        examples=[["tool_123", "tool_456"]],
+        description="List of tool names available at this node (without service prefix)",
+        examples=[["get_upcoming_slots", "book_appointment"]],
     ),
 ]
 
@@ -214,32 +214,53 @@ class JourneyNodeDTO(
     id: JourneyNodeId
     creation_utc: str
     action: str | None
-    tools: list[ToolId]
+    tools: list[str]  # Tool names (without service prefix)
     metadata: dict[str, Any]
 
 
 class JourneyNodeCreationParamsDTO(
     DefaultBaseModel,
-    json_schema_extra={"example": {"action": "Ask for preferred time", "tools": ["tool_123"]}},
+    json_schema_extra={
+        "example": {
+            "action": "Ask for preferred time",
+            "tools": ["get_upcoming_slots"],
+            "kind": "tool"
+        }
+    },
 ):
     """
     Parameters for creating a new journey node.
+
+    Note: Tools should be specified by their tool name only (e.g., "get_upcoming_slots").
+    The service name "built-in" will be added automatically.
+    The 'kind' field is optional and will be auto-detected if not provided.
     """
 
     action: JourneyNodeActionField = None
-    tools: JourneyNodeToolsField = Field(default_factory=list)
+    tools: list[str] = Field(default_factory=list, description="List of tool names (without service prefix)")
+    kind: Annotated[
+        str | None,
+        Field(
+            default=None,
+            description="Node kind: 'chat', 'tool', or 'fork'. Auto-detected if not provided.",
+            examples=["chat", "tool"],
+        ),
+    ] = None
 
 
 class JourneyNodeUpdateParamsDTO(
     DefaultBaseModel,
-    json_schema_extra={"example": {"action": "Updated action text"}},
+    json_schema_extra={"example": {"action": "Updated action text", "tools": ["get_upcoming_slots"]}},
 ):
     """
     Parameters for updating a journey node.
+
+    Note: Tools should be specified by their tool name only (e.g., "get_upcoming_slots").
+    The service name "built-in" will be added automatically.
     """
 
     action: JourneyNodeActionField = None
-    tools: JourneyNodeToolsField | None = None
+    tools: list[str] | None = None
 
 
 class JourneyEdgeDTO(
@@ -793,17 +814,36 @@ def create_router(
         """
         await authorization_policy.authorize(request=request, operation=Operation.UPDATE_JOURNEY)
 
+        # Convert tool names to ToolId format
+        tool_ids = [ToolId(service_name="built-in", tool_name=name) for name in params.tools]
+
         node = await app.journeys.create_node(
             journey_id=journey_id,
             action=params.action,
-            tools=params.tools,
+            tools=tool_ids,
         )
+
+        # Set node metadata based on kind or auto-detect
+        kind = params.kind
+        if not kind:
+            # Auto-detect kind based on tools and action
+            if tool_ids:
+                kind = "tool"
+            elif params.action:
+                kind = "chat"
+
+        if kind:
+            node = await app.journeys.set_node_metadata(
+                node_id=node.id,
+                key="journey_node",
+                value={"kind": kind},
+            )
 
         return JourneyNodeDTO(
             id=node.id,
             creation_utc=node.creation_utc.isoformat(),
             action=node.action,
-            tools=node.tools,
+            tools=[tool.tool_name if isinstance(tool, ToolId) else str(tool) for tool in node.tools],
             metadata=node.metadata,
         )
 
@@ -836,7 +876,7 @@ def create_router(
                 id=node.id,
                 creation_utc=node.creation_utc.isoformat(),
                 action=node.action,
-                tools=node.tools,
+                tools=[tool.tool_name if isinstance(tool, ToolId) else str(tool) for tool in node.tools],
                 metadata=node.metadata,
             )
             for node in graph.nodes
@@ -870,7 +910,7 @@ def create_router(
             id=node.id,
             creation_utc=node.creation_utc.isoformat(),
             action=node.action,
-            tools=node.tools,
+            tools=[tool.tool_name if isinstance(tool, ToolId) else str(tool) for tool in node.tools],
             metadata=node.metadata,
         )
 
@@ -897,17 +937,22 @@ def create_router(
         """
         await authorization_policy.authorize(request=request, operation=Operation.UPDATE_JOURNEY)
 
+        # Convert tool names to ToolId format if tools are provided
+        tool_ids = None
+        if params.tools is not None:
+            tool_ids = [ToolId(service_name="built-in", tool_name=name) for name in params.tools]
+
         node = await app.journeys.update_node(
             node_id=node_id,
             action=params.action,
-            tools=params.tools,
+            tools=tool_ids,
         )
 
         return JourneyNodeDTO(
             id=node.id,
             creation_utc=node.creation_utc.isoformat(),
             action=node.action,
-            tools=node.tools,
+            tools=[tool.tool_name if isinstance(tool, ToolId) else str(tool) for tool in node.tools],
             metadata=node.metadata,
         )
 
@@ -965,7 +1010,7 @@ def create_router(
             id=node.id,
             creation_utc=node.creation_utc.isoformat(),
             action=node.action,
-            tools=node.tools,
+            tools=[tool.tool_name if isinstance(tool, ToolId) else str(tool) for tool in node.tools],
             metadata=node.metadata,
         )
 
