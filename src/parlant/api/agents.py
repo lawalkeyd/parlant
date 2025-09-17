@@ -549,8 +549,8 @@ def create_router(
         id: JourneyId
         title: str
         description: str
-        conditions: Sequence[GuidelineId]
-        tags: Sequence[TagId]
+        conditions: list[GuidelineId]
+        tags: list[TagId]
 
     @router.post(
         "/{agent_id}/journeys",

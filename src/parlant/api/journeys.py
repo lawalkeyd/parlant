@@ -135,7 +135,7 @@ class JourneyDTO(
     id: JourneyIdPath
     title: JourneyTitleField
     description: str
-    conditions: Sequence[GuidelineId]
+    conditions: list[GuidelineId]
     tags: JourneyTagsField
     root_node_id: JourneyNodeId
 
@@ -214,7 +214,7 @@ class JourneyNodeDTO(
     id: JourneyNodeId
     creation_utc: str
     action: str | None
-    tools: Sequence[ToolId]
+    tools: list[ToolId]
     metadata: dict[str, Any]
 
 
@@ -310,7 +310,7 @@ class JourneyCreationParamsDTO(
 
     title: JourneyTitleField
     description: str
-    conditions: Sequence[JourneyConditionField]
+    conditions: list[JourneyConditionField]
     tags: JourneyTagsField | None = None
 
 
