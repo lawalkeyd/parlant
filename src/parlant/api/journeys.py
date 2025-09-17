@@ -13,7 +13,7 @@
 # limitations under the License.
 
 from collections import defaultdict
-from fastapi import APIRouter, Path, Query, Request, status
+from fastapi import APIRouter, HTTPException, Path, Query, Request, status
 from fastapi.responses import PlainTextResponse
 from pydantic import Field
 from typing import Annotated, Any, Sequence, TypeAlias, cast
@@ -171,8 +171,11 @@ JourneyNodeToolsField: TypeAlias = Annotated[
     list[str],
     Field(
         default_factory=list,
-        description="List of tool names available at this node (without service prefix)",
-        examples=[["get_upcoming_slots", "book_appointment"]],
+        description=(
+            "List of tool identifiers. Provide either a tool name for built-in tools or "
+            "'service:name' to reference a specific service."
+        ),
+        examples=[["built-in:get_upcoming_slots", "support:book_appointment"]],
     ),
 ]
 
@@ -189,7 +192,7 @@ node_example: ExampleJson = {
     "id": "node_abc123",
     "creation_utc": "2024-01-20T10:30:00Z",
     "action": "Ask for preferred appointment time",
-    "tools": ["get_available_slots"],
+    "tools": ["built-in:get_available_slots"],
     "metadata": {"journey_node": {"kind": "chat"}},
 }
 
@@ -201,6 +204,23 @@ edge_example: ExampleJson = {
     "condition": "The patient selects a time slot",
     "metadata": {},
 }
+
+_DEFAULT_TOOL_SERVICE = "built-in"
+
+
+def _parse_tool_identifier(value: str) -> ToolId:
+    identifier = value.strip()
+    if not identifier:
+        raise ValueError("Tool identifier cannot be empty.")
+
+    if ":" in identifier:
+        return ToolId.from_string(identifier)
+
+    return ToolId(service_name=_DEFAULT_TOOL_SERVICE, tool_name=identifier)
+
+
+def _serialize_tool_identifier(tool_id: ToolId) -> str:
+    return tool_id.to_string()
 
 
 class JourneyNodeDTO(
@@ -214,7 +234,7 @@ class JourneyNodeDTO(
     id: JourneyNodeId
     creation_utc: str
     action: str | None
-    tools: list[str]  # Tool names (without service prefix)
+    tools: list[str]
     metadata: dict[str, Any]
 
 
@@ -223,21 +243,26 @@ class JourneyNodeCreationParamsDTO(
     json_schema_extra={
         "example": {
             "action": "Ask for preferred time",
-            "tools": ["get_upcoming_slots"],
-            "kind": "tool"
+            "tools": ["built-in:get_upcoming_slots"],
+            "kind": "tool",
         }
     },
 ):
     """
     Parameters for creating a new journey node.
 
-    Note: Tools should be specified by their tool name only (e.g., "get_upcoming_slots").
-    The service name "built-in" will be added automatically.
+    Note: Tools can be specified either by tool name (defaults to the built-in service) or by
+    providing an explicit "service:name" identifier.
     The 'kind' field is optional and will be auto-detected if not provided.
     """
 
     action: JourneyNodeActionField = None
-    tools: list[str] = Field(default_factory=list, description="List of tool names (without service prefix)")
+    tools: list[str] = Field(
+        default_factory=list,
+        description=(
+            "List of tool identifiers. Provide either a tool name (built-in) or 'service:name'."
+        ),
+    )
     kind: Annotated[
         str | None,
         Field(
@@ -250,13 +275,15 @@ class JourneyNodeCreationParamsDTO(
 
 class JourneyNodeUpdateParamsDTO(
     DefaultBaseModel,
-    json_schema_extra={"example": {"action": "Updated action text", "tools": ["get_upcoming_slots"]}},
+    json_schema_extra={
+        "example": {"action": "Updated action text", "tools": ["built-in:get_upcoming_slots"]}
+    },
 ):
     """
     Parameters for updating a journey node.
 
-    Note: Tools should be specified by their tool name only (e.g., "get_upcoming_slots").
-    The service name "built-in" will be added automatically.
+    Note: Tools can be specified either by tool name (defaults to the built-in service) or using
+    "service:name" to target a specific service.
     """
 
     action: JourneyNodeActionField = None
@@ -814,8 +841,14 @@ def create_router(
         """
         await authorization_policy.authorize(request=request, operation=Operation.UPDATE_JOURNEY)
 
-        # Convert tool names to ToolId format
-        tool_ids = [ToolId(service_name="built-in", tool_name=name) for name in params.tools]
+        # Convert tool identifiers into ToolId values
+        try:
+            tool_ids = [_parse_tool_identifier(name) for name in params.tools]
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=str(exc),
+            )
 
         node = await app.journeys.create_node(
             journey_id=journey_id,
@@ -843,7 +876,7 @@ def create_router(
             id=node.id,
             creation_utc=node.creation_utc.isoformat(),
             action=node.action,
-            tools=[tool.tool_name if isinstance(tool, ToolId) else str(tool) for tool in node.tools],
+            tools=[_serialize_tool_identifier(tool) for tool in node.tools],
             metadata=node.metadata,
         )
 
@@ -876,7 +909,7 @@ def create_router(
                 id=node.id,
                 creation_utc=node.creation_utc.isoformat(),
                 action=node.action,
-                tools=[tool.tool_name if isinstance(tool, ToolId) else str(tool) for tool in node.tools],
+                tools=[_serialize_tool_identifier(tool) for tool in node.tools],
                 metadata=node.metadata,
             )
             for node in graph.nodes
@@ -910,7 +943,7 @@ def create_router(
             id=node.id,
             creation_utc=node.creation_utc.isoformat(),
             action=node.action,
-            tools=[tool.tool_name if isinstance(tool, ToolId) else str(tool) for tool in node.tools],
+            tools=[_serialize_tool_identifier(tool) for tool in node.tools],
             metadata=node.metadata,
         )
 
@@ -940,7 +973,13 @@ def create_router(
         # Convert tool names to ToolId format if tools are provided
         tool_ids = None
         if params.tools is not None:
-            tool_ids = [ToolId(service_name="built-in", tool_name=name) for name in params.tools]
+            try:
+                tool_ids = [_parse_tool_identifier(name) for name in params.tools]
+            except ValueError as exc:
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    detail=str(exc),
+                )
 
         node = await app.journeys.update_node(
             node_id=node_id,
@@ -952,7 +991,7 @@ def create_router(
             id=node.id,
             creation_utc=node.creation_utc.isoformat(),
             action=node.action,
-            tools=[tool.tool_name if isinstance(tool, ToolId) else str(tool) for tool in node.tools],
+            tools=[_serialize_tool_identifier(tool) for tool in node.tools],
             metadata=node.metadata,
         )
 
@@ -1010,7 +1049,7 @@ def create_router(
             id=node.id,
             creation_utc=node.creation_utc.isoformat(),
             action=node.action,
-            tools=[tool.tool_name if isinstance(tool, ToolId) else str(tool) for tool in node.tools],
+            tools=[_serialize_tool_identifier(tool) for tool in node.tools],
             metadata=node.metadata,
         )
 
