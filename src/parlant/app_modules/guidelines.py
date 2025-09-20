@@ -103,8 +103,41 @@ class GuidelineModule:
 
         return guideline
 
+    async def create_for_agent(
+        self,
+        agent_id: AgentId,
+        condition: str,
+        action: str | None,
+        metadata: Mapping[str, JSONSerializable] | None,
+        enabled: bool | None,
+        tags: Sequence[TagId] | None,
+    ) -> Guideline:
+        await self._agent_store.read_agent(agent_id=agent_id)
+
+        agent_tag = Tag.for_agent_id(agent_id)
+        combined_tags = list(tags) if tags else []
+        if agent_tag not in combined_tags:
+            combined_tags.append(agent_tag)
+
+        return await self.create(
+            condition=condition,
+            action=action,
+            metadata=metadata,
+            enabled=enabled,
+            tags=combined_tags,
+        )
+
     async def read(self, guideline_id: GuidelineId) -> Guideline:
         guideline = await self._guideline_store.read_guideline(guideline_id=guideline_id)
+        return guideline
+
+    async def read_for_agent(self, guideline_id: GuidelineId, agent_id: AgentId) -> Guideline:
+        guideline = await self._guideline_store.read_guideline(guideline_id=guideline_id)
+        agent_tag = Tag.for_agent_id(agent_id)
+
+        if agent_tag not in guideline.tags:
+            raise ItemNotFoundError(item_id=UniqueId(guideline_id))
+
         return guideline
 
     async def find(

@@ -13,7 +13,7 @@
 # limitations under the License.
 
 from enum import Enum
-from fastapi import APIRouter, Path, Request, status
+from fastapi import APIRouter, HTTPException, Path, Request, status
 from pydantic import Field
 from typing import Annotated, Sequence, TypeAlias
 
@@ -22,10 +22,14 @@ from parlant.api.common import ExampleJson, apigen_config, example_json_content
 from parlant.app_modules.agents import AgentTagUpdateParamsModel
 from parlant.core.agents import AgentId, CompositionMode
 from parlant.core.application import Application
-from parlant.core.common import DefaultBaseModel
-from parlant.core.guidelines import GuidelineId
+from parlant.core.common import DefaultBaseModel, JSONSerializable, ItemNotFoundError
+from parlant.core.guidelines import GuidelineId, Guideline
 from parlant.core.journeys import JourneyId
-from parlant.core.tags import TagId
+from parlant.core.tags import Tag, TagId
+from parlant.app_modules.guidelines import (
+    GuidelineMetadataUpdateParams,
+    GuidelineTagsUpdateParams,
+)
 
 API_GROUP = "agents"
 
@@ -35,6 +39,14 @@ AgentIdPath: TypeAlias = Annotated[
         description="Unique identifier for the agent",
         examples=["IUCGT-lvpS"],
         min_length=1,
+    ),
+]
+
+AgentGuidelineIdPath: TypeAlias = Annotated[
+    GuidelineId,
+    Path(
+        description="Unique identifier for a guideline associated with the agent",
+        examples=["guid_123"],
     ),
 ]
 
@@ -103,6 +115,15 @@ agent_example: ExampleJson = {
     "tags": ["tag1", "tag2"],
 }
 
+agent_guideline_example: ExampleJson = {
+    "id": "guid_123",
+    "condition": "when the customer asks about pricing",
+    "action": "provide current pricing information",
+    "enabled": True,
+    "metadata": {"key1": "value1"},
+    "tags": ["agent:IUCGT-lvpS", "pricing"],
+}
+
 
 class CompositionModeDTO(Enum):
     """
@@ -119,6 +140,46 @@ class CompositionModeDTO(Enum):
     CANNED_FLUID = "canned_fluid"
     CANNED_COMPOSITED = "composited_canned"
     CANNED_STRICT = "strict_canned"
+
+
+class AgentGuidelineDTO(
+    DefaultBaseModel,
+    json_schema_extra={"example": agent_guideline_example},
+):
+    id: GuidelineId
+    condition: str
+    action: str | None
+    enabled: bool
+    metadata: dict[str, JSONSerializable]
+    tags: list[TagId]
+
+
+class AgentGuidelineCreateParamsDTO(
+    DefaultBaseModel,
+    json_schema_extra={
+        "example": {
+            "condition": agent_guideline_example["condition"],
+            "action": agent_guideline_example["action"],
+            "enabled": agent_guideline_example["enabled"],
+            "metadata": agent_guideline_example["metadata"],
+            "tags": agent_guideline_example["tags"],
+        }
+    },
+):
+    condition: str
+    action: str | None = None
+    metadata: dict[str, JSONSerializable] | None = None
+    enabled: bool | None = None
+    tags: list[TagId] | None = None
+
+
+class AgentGuidelineUpdateParamsDTO(DefaultBaseModel):
+    condition: str | None = None
+    action: str | None = None
+    enabled: bool | None = None
+    metadata: dict[str, JSONSerializable] | None = None
+    remove_metadata_keys: list[str] | None = None
+    tags: list[TagId] | None = None
 
 
 class AgentDTO(
@@ -246,6 +307,17 @@ def _composition_mode_to_composition_mode_dto(
             return CompositionModeDTO.CANNED_COMPOSITED
         case CompositionMode.CANNED_FLUID:
             return CompositionModeDTO.CANNED_FLUID
+
+
+def _guideline_to_dto(guideline: Guideline) -> AgentGuidelineDTO:
+    return AgentGuidelineDTO(
+        id=guideline.id,
+        condition=guideline.content.condition,
+        action=guideline.content.action,
+        enabled=guideline.enabled,
+        metadata=dict(guideline.metadata),
+        tags=list(guideline.tags),
+    )
 
 
 def create_router(
@@ -480,6 +552,138 @@ def create_router(
         )
 
         await app.agents.delete(agent_id=agent_id)
+
+    # Guideline management for agents
+
+    @router.post(
+        "/{agent_id}/guidelines",
+        status_code=status.HTTP_201_CREATED,
+        operation_id="create_agent_guideline",
+        response_model=AgentGuidelineDTO,
+        responses={
+            status.HTTP_201_CREATED: {
+                "description": "Guideline created and associated with the agent.",
+                "content": example_json_content(agent_guideline_example),
+            },
+            status.HTTP_404_NOT_FOUND: {
+                "description": "Agent not found. The specified `agent_id` does not exist"
+            },
+        },
+        **apigen_config(group_name=API_GROUP, method_name="create_guideline"),
+    )
+    async def create_agent_guideline(
+        request: Request,
+        agent_id: AgentIdPath,
+        params: AgentGuidelineCreateParamsDTO,
+    ) -> AgentGuidelineDTO:
+        await policy.authorize(request=request, operation=Operation.CREATE_GUIDELINE)
+
+        try:
+            guideline = await app.guidelines.create_for_agent(
+                agent_id=agent_id,
+                condition=params.condition,
+                action=params.action,
+                metadata=params.metadata,
+                enabled=params.enabled,
+                tags=params.tags,
+            )
+        except ItemNotFoundError as exc:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+
+        return _guideline_to_dto(guideline)
+
+    @router.patch(
+        "/{agent_id}/guidelines/{guideline_id}",
+        operation_id="update_agent_guideline",
+        response_model=AgentGuidelineDTO,
+        responses={
+            status.HTTP_200_OK: {
+                "description": "Guideline successfully updated.",
+                "content": example_json_content(agent_guideline_example),
+            },
+            status.HTTP_404_NOT_FOUND: {
+                "description": "Guideline not found for this agent"
+            },
+        },
+        **apigen_config(group_name=API_GROUP, method_name="update_guideline"),
+    )
+    async def update_agent_guideline(
+        request: Request,
+        agent_id: AgentIdPath,
+        guideline_id: AgentGuidelineIdPath,
+        params: AgentGuidelineUpdateParamsDTO,
+    ) -> AgentGuidelineDTO:
+        await policy.authorize(request=request, operation=Operation.UPDATE_GUIDELINE)
+
+        try:
+            existing = await app.guidelines.read_for_agent(guideline_id=guideline_id, agent_id=agent_id)
+        except ItemNotFoundError as exc:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+
+        agent_tag = Tag.for_agent_id(agent_id)
+        tags_update = None
+        if params.tags is not None:
+            desired_tags: list[TagId] = []
+            for tag in params.tags:
+                if tag not in desired_tags:
+                    desired_tags.append(tag)
+            if agent_tag not in desired_tags:
+                desired_tags.append(agent_tag)
+
+            add = [tag for tag in desired_tags if tag not in existing.tags]
+            remove = [tag for tag in existing.tags if tag not in desired_tags and tag != agent_tag]
+
+            tags_update = GuidelineTagsUpdateParams(
+                add=add or None,
+                remove=remove or None,
+            )
+
+        metadata_update = None
+        if params.metadata is not None or params.remove_metadata_keys:
+            metadata_update = GuidelineMetadataUpdateParams(
+                set=params.metadata,
+                unset=params.remove_metadata_keys,
+            )
+
+        updated = await app.guidelines.update(
+            guideline_id=guideline_id,
+            condition=params.condition,
+            action=params.action,
+            tool_associations=None,
+            enabled=params.enabled,
+            tags=tags_update,
+            metadata=metadata_update,
+        )
+
+        return _guideline_to_dto(updated)
+
+    @router.delete(
+        "/{agent_id}/guidelines/{guideline_id}",
+        status_code=status.HTTP_204_NO_CONTENT,
+        operation_id="delete_agent_guideline",
+        responses={
+            status.HTTP_204_NO_CONTENT: {
+                "description": "Guideline successfully deleted."
+            },
+            status.HTTP_404_NOT_FOUND: {
+                "description": "Guideline not found for this agent"
+            },
+        },
+        **apigen_config(group_name=API_GROUP, method_name="delete_guideline"),
+    )
+    async def delete_agent_guideline(
+        request: Request,
+        agent_id: AgentIdPath,
+        guideline_id: AgentGuidelineIdPath,
+    ) -> None:
+        await policy.authorize(request=request, operation=Operation.DELETE_GUIDELINE)
+
+        try:
+            await app.guidelines.read_for_agent(guideline_id=guideline_id, agent_id=agent_id)
+        except ItemNotFoundError as exc:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+
+        await app.guidelines.delete(guideline_id=guideline_id)
 
     # Journey creation for agents
     journey_example: ExampleJson = {

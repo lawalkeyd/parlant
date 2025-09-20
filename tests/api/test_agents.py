@@ -20,7 +20,8 @@ from pytest import mark, raises
 
 from parlant.core.agents import AgentStore
 from parlant.core.common import ItemNotFoundError
-from parlant.core.tags import TagId, TagStore
+from parlant.core.guidelines import GuidelineStore
+from parlant.core.tags import Tag, TagId, TagStore
 
 
 async def test_that_an_agent_can_be_created_without_description(
@@ -201,6 +202,83 @@ async def test_that_an_agent_can_be_read(
     assert agent_dto["name"] == "test-agent"
     assert agent_dto["description"] is None
     assert agent_dto["composition_mode"] == "fluid"
+
+
+async def test_agent_guideline_crud(
+    async_client: httpx.AsyncClient,
+    container: Container,
+) -> None:
+    guideline_store = container[GuidelineStore]
+    tag_store = container[TagStore]
+
+    agent = (
+        (
+            await async_client.post(
+                "/agents",
+                json={"name": "guideline-agent"},
+            )
+        )
+        .raise_for_status()
+        .json()
+    )
+    agent_id = agent["id"]
+    agent_tag = Tag.for_agent_id(agent_id)
+
+    extra_tag = await tag_store.create_tag("pricing")
+
+    create_payload = {
+        "condition": "customer asks about pricing",
+        "action": "provide current pricing",
+        "metadata": {"key1": "value1"},
+        "enabled": True,
+        "tags": [extra_tag.id],
+    }
+
+    create_response = await async_client.post(
+        f"/agents/{agent_id}/guidelines",
+        json=create_payload,
+    )
+    assert create_response.status_code == status.HTTP_201_CREATED
+
+    created_guideline = create_response.json()
+    assert agent_tag in created_guideline["tags"]
+    assert extra_tag.id in created_guideline["tags"]
+
+    stored_guideline = await guideline_store.read_guideline(created_guideline["id"])
+    assert agent_tag in stored_guideline.tags
+    assert stored_guideline.metadata["key1"] == "value1"
+
+    update_payload = {
+        "action": "provide detailed pricing",
+        "metadata": {"key2": "value2"},
+        "remove_metadata_keys": ["key1"],
+        "tags": [extra_tag.id],
+    }
+
+    update_response = await async_client.patch(
+        f"/agents/{agent_id}/guidelines/{created_guideline['id']}",
+        json=update_payload,
+    )
+    assert update_response.status_code == status.HTTP_200_OK
+
+    updated_guideline = update_response.json()
+    assert updated_guideline["action"] == "provide detailed pricing"
+    assert updated_guideline["metadata"] == {"key2": "value2"}
+    assert agent_tag in updated_guideline["tags"]
+    assert extra_tag.id in updated_guideline["tags"]
+
+    stored_after_update = await guideline_store.read_guideline(created_guideline["id"])
+    assert stored_after_update.metadata == {"key2": "value2"}
+    assert agent_tag in stored_after_update.tags
+    assert extra_tag.id in stored_after_update.tags
+
+    delete_response = await async_client.delete(
+        f"/agents/{agent_id}/guidelines/{created_guideline['id']}",
+    )
+    assert delete_response.status_code == status.HTTP_204_NO_CONTENT
+
+    with raises(ItemNotFoundError):
+        await guideline_store.read_guideline(created_guideline["id"])
 
 
 @mark.parametrize(
