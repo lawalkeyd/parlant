@@ -18,11 +18,16 @@ from pydantic import Field
 from typing import Annotated, Sequence, TypeAlias
 
 from parlant.api.authorization import AuthorizationPolicy, Operation
-from parlant.api.common import ExampleJson, apigen_config, example_json_content
+from parlant.api.common import (
+    ExampleJson,
+    JSONSerializableDTO,
+    apigen_config,
+    example_json_content,
+)
 from parlant.app_modules.agents import AgentTagUpdateParamsModel
 from parlant.core.agents import AgentId, CompositionMode
 from parlant.core.application import Application
-from parlant.core.common import DefaultBaseModel, JSONSerializable, ItemNotFoundError
+from parlant.core.common import DefaultBaseModel, ItemNotFoundError
 from parlant.core.guidelines import GuidelineId, Guideline
 from parlant.core.journeys import JourneyId
 from parlant.core.tags import Tag, TagId
@@ -150,7 +155,7 @@ class AgentGuidelineDTO(
     condition: str
     action: str | None
     enabled: bool
-    metadata: dict[str, JSONSerializable]
+    metadata: dict[str, JSONSerializableDTO]
     tags: list[TagId]
 
 
@@ -168,7 +173,7 @@ class AgentGuidelineCreateParamsDTO(
 ):
     condition: str
     action: str | None = None
-    metadata: dict[str, JSONSerializable] | None = None
+    metadata: dict[str, JSONSerializableDTO] | None = None
     enabled: bool | None = None
     tags: list[TagId] | None = None
 
@@ -177,7 +182,7 @@ class AgentGuidelineUpdateParamsDTO(DefaultBaseModel):
     condition: str | None = None
     action: str | None = None
     enabled: bool | None = None
-    metadata: dict[str, JSONSerializable] | None = None
+    metadata: dict[str, JSONSerializableDTO] | None = None
     remove_metadata_keys: list[str] | None = None
     tags: list[TagId] | None = None
 
