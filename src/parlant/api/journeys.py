@@ -1260,7 +1260,7 @@ def create_router(
             id=root_node.id,
             creation_utc=root_node.creation_utc.isoformat(),
             action=root_node.action,
-            tools=root_node.tools,
+            tools=[_serialize_tool_identifier(tool) for tool in root_node.tools],
             metadata=root_node.metadata,
         )
 
