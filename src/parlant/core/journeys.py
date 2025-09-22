@@ -16,7 +16,7 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from itertools import chain
-from typing import Awaitable, Callable, Mapping, NewType, Optional, Sequence, cast
+from typing import Any, Awaitable, Callable, Mapping, NewType, Optional, Sequence, cast
 from typing_extensions import override, TypedDict, Self, Required
 
 from parlant.core.async_utils import ReaderWriterLock, safe_gather
@@ -49,6 +49,8 @@ from parlant.core.persistence.vector_database_helper import (
 )
 from parlant.core.tags import TagId
 from parlant.core.tools import ToolId
+
+_DEFAULT_TOOL_SERVICE = "built-in"
 
 JourneyId = NewType("JourneyId", str)
 JourneyNodeId = NewType("JourneyNodeId", str)
@@ -595,7 +597,7 @@ class JourneyVectorStore(JourneyStore):
             creation_utc=datetime.now(timezone.utc).isoformat(),
             journey_id=journey_id,
             action=node.action,
-            tools=[tool.to_string() for tool in node.tools],  # Serialize ToolIds to strings
+            tools=self._serialize_tools(node.tools),
             metadata=node.metadata,
         )
 
@@ -604,7 +606,7 @@ class JourneyVectorStore(JourneyStore):
             id=JourneyNodeId(doc["node_id"]),
             creation_utc=datetime.fromisoformat(doc["creation_utc"]),
             action=doc["action"],
-            tools=[ToolId.from_string(tool) for tool in doc["tools"]],  # Deserialize strings to ToolIds
+            tools=self._deserialize_tools(doc.get("tools")),
             metadata=doc["metadata"],
         )
 
@@ -1067,6 +1069,11 @@ class JourneyVectorStore(JourneyStore):
 
             updated = {**doc, **params}
 
+            if "tools" in updated and updated["tools"] is not None:
+                updated["tools"] = self._serialize_tools(
+                    self._coerce_tool_ids(updated["tools"])
+                )
+
             result = await self._node_association_collection.update_one(
                 filters={"node_id": {"$eq": node_id}},
                 params=cast(JourneyNodeAssociationDocument, to_json_dict(updated)),
@@ -1146,11 +1153,60 @@ class JourneyVectorStore(JourneyStore):
                 params={
                     "metadata": updated_metadata,
                 },
-            )
+        )
 
         assert result.updated_document
 
         return self._deserialize_node(result.updated_document)
+
+    @staticmethod
+    def _serialize_tools(tools: Sequence[ToolId]) -> list[str]:
+        return [tool.to_string() for tool in tools]
+
+    @staticmethod
+    def _coerce_tool_ids(raw_tools: Any) -> list[ToolId]:
+        if raw_tools is None:
+            return []
+
+        if isinstance(raw_tools, ToolId):
+            return [raw_tools]
+
+        if isinstance(raw_tools, Sequence) and not isinstance(raw_tools, (str, bytes)):
+            return [JourneyVectorStore._coerce_tool_id(value) for value in raw_tools]
+
+        return [JourneyVectorStore._coerce_tool_id(raw_tools)]
+
+    @staticmethod
+    def _coerce_tool_id(value: Any) -> ToolId:
+        if isinstance(value, ToolId):
+            return value
+
+        if isinstance(value, str):
+            if ":" in value:
+                return ToolId.from_string(value)
+            return ToolId(service_name=_DEFAULT_TOOL_SERVICE, tool_name=value)
+
+        if isinstance(value, Mapping):
+            service_name = value.get("service_name") or value.get("service")
+            tool_name = value.get("tool_name") or value.get("name")
+
+            if isinstance(service_name, str) and isinstance(tool_name, str):
+                return ToolId(service_name=service_name, tool_name=tool_name)
+
+        if isinstance(value, Sequence) and not isinstance(value, (str, bytes)):
+            sequence = list(value)
+
+            if len(sequence) == 2 and all(isinstance(item, str) for item in sequence):
+                return ToolId(service_name=sequence[0], tool_name=sequence[1])
+
+        raise ValueError(f"Unsupported tool identifier representation: {value!r}")
+
+    @staticmethod
+    def _deserialize_tools(raw_tools: Any) -> list[ToolId]:
+        try:
+            return JourneyVectorStore._coerce_tool_ids(raw_tools or [])
+        except ValueError as exc:
+            raise ValueError(f"Unable to deserialize journey node tools: {raw_tools!r}") from exc
 
     @override
     async def unset_node_metadata(
