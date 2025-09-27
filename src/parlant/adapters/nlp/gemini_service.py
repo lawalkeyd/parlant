@@ -14,29 +14,35 @@
 
 import os
 import time
-from google.api_core.exceptions import NotFound, TooManyRequests, ResourceExhausted, ServerError
+from typing import Any, Mapping, cast
+
 import google.genai  # type: ignore
 import google.genai.types  # type: ignore
-from typing import Any, Mapping, cast
-from typing_extensions import override
 import jsonfinder  # type: ignore
+from google.api_core.exceptions import (
+    NotFound,
+    ResourceExhausted,
+    ServerError,
+    TooManyRequests,
+)
 from pydantic import ValidationError
+from typing_extensions import override
 
 from parlant.adapters.nlp.common import normalize_json_output
 from parlant.core.engines.alpha.prompt_builder import PromptBuilder
-from parlant.core.nlp.policies import policy, retry
-from parlant.core.nlp.tokenization import EstimatingTokenizer
-from parlant.core.nlp.moderation import ModerationService, NoModeration
-from parlant.core.nlp.service import NLPService
+from parlant.core.loggers import Logger
 from parlant.core.nlp.embedding import Embedder, EmbeddingResult
 from parlant.core.nlp.generation import (
-    T,
-    SchematicGenerator,
     FallbackSchematicGenerator,
     SchematicGenerationResult,
+    SchematicGenerator,
+    T,
 )
 from parlant.core.nlp.generation_info import GenerationInfo, UsageInfo
-from parlant.core.loggers import Logger
+from parlant.core.nlp.moderation import ModerationService, NoModeration
+from parlant.core.nlp.policies import policy, retry
+from parlant.core.nlp.service import NLPService
+from parlant.core.nlp.tokenization import EstimatingTokenizer
 
 RATE_LIMIT_ERROR_MESSAGE = (
     "Google API rate limit exceeded.\n\n"
@@ -60,7 +66,7 @@ class GoogleEstimatingTokenizer(EstimatingTokenizer):
     @override
     async def estimate_token_count(self, prompt: str) -> int:
         model_approximation = {
-            "text-embedding-004": "gemini-1.5-flash",
+            "text-embedding-004": "gemini-2.0-flash",
         }.get(self._model_name, self._model_name)
 
         result = await self._client.aio.models.count_tokens(
@@ -84,7 +90,9 @@ class GeminiSchematicGenerator(SchematicGenerator[T]):
 
         self._client = google.genai.Client(api_key=os.environ.get("GEMINI_API_KEY"))
 
-        self._tokenizer = GoogleEstimatingTokenizer(client=self._client, model_name=self.model_name)
+        self._tokenizer = GoogleEstimatingTokenizer(
+            client=self._client, model_name=self.model_name
+        )
 
     @property
     @override
@@ -117,7 +125,9 @@ class GeminiSchematicGenerator(SchematicGenerator[T]):
         if isinstance(prompt, PromptBuilder):
             prompt = prompt.build()
 
-        gemini_api_arguments = {k: v for k, v in hints.items() if k in self.supported_hints}
+        gemini_api_arguments = {
+            k: v for k, v in hints.items() if k in self.supported_hints
+        }
         config = {
             "response_mime_type": "application/json",
             "response_schema": self.schema.model_json_schema(),
@@ -167,20 +177,24 @@ class GeminiSchematicGenerator(SchematicGenerator[T]):
                     schema_name=self.schema.__name__,
                     model=self.id,
                     duration=(t_end - t_start),
-                    usage=UsageInfo(
-                        input_tokens=response.usage_metadata.prompt_token_count or 0,
-                        output_tokens=response.usage_metadata.candidates_token_count or 0,
-                        extra={
-                            "cached_input_tokens": (
-                                response.usage_metadata.cached_content_token_count
-                                if response.usage_metadata
-                                else 0
-                            )
-                            or 0
-                        },
-                    )
-                    if response.usage_metadata
-                    else UsageInfo(input_tokens=0, output_tokens=0, extra={}),
+                    usage=(
+                        UsageInfo(
+                            input_tokens=response.usage_metadata.prompt_token_count
+                            or 0,
+                            output_tokens=response.usage_metadata.candidates_token_count
+                            or 0,
+                            extra={
+                                "cached_input_tokens": (
+                                    response.usage_metadata.cached_content_token_count
+                                    if response.usage_metadata
+                                    else 0
+                                )
+                                or 0
+                            },
+                        )
+                        if response.usage_metadata
+                        else UsageInfo(input_tokens=0, output_tokens=0, extra={})
+                    ),
                 ),
             )
         except ValidationError:
@@ -287,7 +301,9 @@ class GoogleEmbedder(Embedder):
 
         self._logger = logger
         self._client = google.genai.Client(api_key=os.environ.get("GEMINI_API_KEY"))
-        self._tokenizer = GoogleEstimatingTokenizer(client=self._client, model_name=self.model_name)
+        self._tokenizer = GoogleEstimatingTokenizer(
+            client=self._client, model_name=self.model_name
+        )
 
     @property
     @override
@@ -317,14 +333,18 @@ class GoogleEmbedder(Embedder):
         texts: list[str],
         hints: Mapping[str, Any] = {},
     ) -> EmbeddingResult:
-        gemini_api_arguments = {k: v for k, v in hints.items() if k in self.supported_hints}
+        gemini_api_arguments = {
+            k: v for k, v in hints.items() if k in self.supported_hints
+        }
 
         try:
             with self._logger.operation("Embedding text with gemini"):
                 response = await self._client.aio.models.embed_content(  # type: ignore
                     model=self.model_name,
                     contents=texts,  # type: ignore
-                    config=cast(google.genai.types.EmbedContentConfigDict, gemini_api_arguments),
+                    config=cast(
+                        google.genai.types.EmbedContentConfigDict, gemini_api_arguments
+                    ),
                 )
         except TooManyRequests:
             self._logger.error(
@@ -343,7 +363,9 @@ class GoogleEmbedder(Embedder):
             raise
 
         vectors = [
-            data_point.values for data_point in response.embeddings or [] if data_point.values
+            data_point.values
+            for data_point in response.embeddings or []
+            if data_point.values
         ]
         return EmbeddingResult(vectors=vectors)
 
