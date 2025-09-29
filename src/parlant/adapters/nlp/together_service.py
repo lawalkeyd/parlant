@@ -12,33 +12,30 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import os
 import time
+from typing import Any, Mapping
+
+import jsonfinder  # type: ignore
+import tiktoken
 from pydantic import ValidationError
 from together import AsyncTogether  # type: ignore
 from together.error import (  # type: ignore
-    RateLimitError,
-    Timeout,
     APIConnectionError,
     APIError,
+    RateLimitError,
     ServiceUnavailableError,
+    Timeout,
 )
-from typing import Any, Mapping
 from typing_extensions import override
-import jsonfinder  # type: ignore
-import os
-import tiktoken
 
 from parlant.adapters.nlp.common import normalize_json_output
 from parlant.adapters.nlp.hugging_face import HuggingFaceEstimatingTokenizer
 from parlant.core.engines.alpha.prompt_builder import PromptBuilder
-from parlant.core.nlp.embedding import Embedder, EmbeddingResult
-from parlant.core.nlp.generation import (
-    T,
-    SchematicGenerator,
-    SchematicGenerationResult,
-)
-from parlant.core.nlp.generation_info import GenerationInfo, UsageInfo
 from parlant.core.loggers import Logger
+from parlant.core.nlp.embedding import Embedder, EmbeddingResult
+from parlant.core.nlp.generation import SchematicGenerationResult, SchematicGenerator, T
+from parlant.core.nlp.generation_info import GenerationInfo, UsageInfo
 from parlant.core.nlp.moderation import ModerationService, NoModeration
 from parlant.core.nlp.policies import policy, retry
 from parlant.core.nlp.service import NLPService
@@ -101,7 +98,9 @@ class TogetherAISchematicGenerator(SchematicGenerator[T]):
         if isinstance(prompt, PromptBuilder):
             prompt = prompt.build()
 
-        together_api_arguments = {k: v for k, v in hints.items() if k in self.supported_hints}
+        together_api_arguments = {
+            k: v for k, v in hints.items() if k in self.supported_hints
+        }
 
         t_start = time.time()
         try:
@@ -228,7 +227,7 @@ class Llama3_1_405B(TogetherAISchematicGenerator[T]):
 class Llama3_3_70B(TogetherAISchematicGenerator[T]):
     def __init__(self, logger: Logger) -> None:
         super().__init__(
-            model_name="meta-llama/Llama-3.3-70B-Instruct-Turbo",
+            model_name="meta-llama/Meta-Llama-3-8B-Instruct-Lite",
             logger=logger,
         )
 
@@ -293,7 +292,9 @@ class TogetherAIEmbedder(Embedder):
 
 class M2Bert32K(TogetherAIEmbedder):
     def __init__(self, logger: Logger) -> None:
-        super().__init__(model_name="togethercomputer/m2-bert-80M-32k-retrieval", logger=logger)
+        super().__init__(
+            model_name="togethercomputer/m2-bert-80M-32k-retrieval", logger=logger
+        )
         self._estimating_tokenizer = HuggingFaceEstimatingTokenizer(self.model_name)
 
     @property
@@ -338,7 +339,9 @@ Please set TOGETHER_API_KEY in your environment before running Parlant.
         self._logger.info("Initialized TogetherService")
 
     @override
-    async def get_schematic_generator(self, t: type[T]) -> TogetherAISchematicGenerator[T]:
+    async def get_schematic_generator(
+        self, t: type[T]
+    ) -> TogetherAISchematicGenerator[T]:
         return Llama3_3_70B[t](self._logger)  # type: ignore
 
     @override
