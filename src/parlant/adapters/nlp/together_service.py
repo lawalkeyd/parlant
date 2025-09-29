@@ -227,7 +227,7 @@ class Llama3_1_405B(TogetherAISchematicGenerator[T]):
 class Llama3_3_70B(TogetherAISchematicGenerator[T]):
     def __init__(self, logger: Logger) -> None:
         super().__init__(
-            model_name="meta-llama/Meta-Llama-3-8B-Instruct-Lite",
+            model_name="meta-llama/Llama-Guard-4-12B",
             logger=logger,
         )
 
