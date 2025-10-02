@@ -66,7 +66,7 @@ class GoogleEstimatingTokenizer(EstimatingTokenizer):
     @override
     async def estimate_token_count(self, prompt: str) -> int:
         model_approximation = {
-            "text-embedding-004": "gemini-2.5-flash-latest",
+            "text-embedding-004": "gemini-flash-latest",
         }.get(self._model_name, self._model_name)
 
         result = await self._client.aio.models.count_tokens(
@@ -233,7 +233,7 @@ class Gemini_2_0_Flash(GeminiSchematicGenerator[T]):
 class Gemini_2_0_Flash_Lite(GeminiSchematicGenerator[T]):
     def __init__(self, logger: Logger) -> None:
         super().__init__(
-            model_name="gemini-2.0-flash-lite-latest",
+            model_name="gemini-2.0-flash-lite-preview-02-05",
             logger=logger,
         )
 
@@ -259,7 +259,7 @@ class Gemini_1_5_Pro(GeminiSchematicGenerator[T]):
 class Gemini_2_5_Flash(GeminiSchematicGenerator[T]):
     def __init__(self, logger: Logger) -> None:
         super().__init__(
-            model_name="gemini-2.5-flash-latest",
+            model_name="gemini-flash-latest",
             logger=logger,
         )
 
@@ -283,7 +283,7 @@ class Gemini_2_5_Flash(GeminiSchematicGenerator[T]):
 class Gemini_2_5_Pro(GeminiSchematicGenerator[T]):
     def __init__(self, logger: Logger) -> None:
         super().__init__(
-            model_name="gemini-2.5-pro-latest",
+            model_name="gemini-2.5-pro",
             logger=logger,
         )
 
